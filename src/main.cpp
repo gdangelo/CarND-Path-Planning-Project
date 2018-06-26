@@ -5,6 +5,7 @@
 #include <iostream>
 #include <thread>
 #include <vector>
+#include <algorithm>
 #include "Eigen-3.3/Eigen/Core"
 #include "Eigen-3.3/Eigen/QR"
 #include "json.hpp"
@@ -202,7 +203,7 @@ int main() {
   }
 
   int lane = 1;
-  double ref_vel = 49; //mph
+  double ref_vel = 0.0; //mph
 
   h.onMessage([&lane,&ref_vel,&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,&map_waypoints_dx,&map_waypoints_dy](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
                      uWS::OpCode opCode) {
@@ -243,12 +244,45 @@ int main() {
 
           	json msgJson;
 
+            int prev_size = previous_path_x.size();
+
+            bool too_close = false;
+
+            for(int i = 0; i < sensor_fusion.size(); i++)
+            {
+              double vx = sensor_fusion[i][3];
+              double vy = sensor_fusion[i][4];
+              double s = sensor_fusion[i][5];
+              double d = sensor_fusion[i][6];
+
+              // Check current car s value after target trajectory steps
+              double speed = sqrt(vx*vx + vy*vy);
+              s += (double) speed * .02;
+
+              int target_d = 2+4*lane;
+              bool same_lane = (d >= target_d - 2) && (d <= target_d + 2);
+              bool dist_too_short = (s > car_s) && (s - car_s < 30.0);
+
+              // The detected car is on the same lane and too close from us
+              if(same_lane && dist_too_short)
+              {
+                too_close = true;
+              }
+            }
+
+            if(too_close)
+            {
+              ref_vel -= .224);
+            }
+            else
+            {
+              ref_vel = min(49.0, ref_vel + .224);
+            }
+
           	// Define a path made up of (x,y) points that the car will visit sequentially every .02 seconds
             double ref_x = car_x;
             double ref_y = car_y;
             double ref_yaw = deg2rad(car_yaw);
-
-            int prev_size = previous_path_x.size();
 
             vector<double> ptsx;
             vector<double> ptsy;
@@ -301,11 +335,7 @@ int main() {
               double shifty = ptsy[i] - ref_y;
               ptsx[i] = shiftx*cos(0-ref_yaw) - shifty*sin(0-ref_yaw);
               ptsy[i] = shiftx*sin(0-ref_yaw) + shifty*cos(0-ref_yaw);
-
-              cout << ptsx[i] << ", " << ptsy[i] << endl;
             }
-
-            cout << "------" << endl << endl;
 
             // Use spline to calculate trajectory
             tk::spline s;
