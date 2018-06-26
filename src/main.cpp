@@ -267,12 +267,17 @@ int main() {
               if(same_lane && dist_too_short)
               {
                 too_close = true;
+                // Change lane
+                if(lane > 0)
+                {
+                  lane -= 1;
+                }
               }
             }
 
             if(too_close)
             {
-              ref_vel -= .224);
+              ref_vel -= .224;
             }
             else
             {
