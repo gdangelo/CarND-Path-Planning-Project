@@ -165,6 +165,47 @@ vector<double> getXY(double s, double d, const vector<double> &maps_s, const vec
 
 }
 
+vector<double> SimpleBehaviorPlanner(vector<vector<double>> sensor_fusion, double car_s, double car_d, double car_speed) {
+  vector<double> end_goal;
+  bool should_change_lane = false;
+
+  for (int i = 0; i < sensor_fusion.size(); ++i) {
+    // Retrieve state of detected vehicle
+    double vx = sensor_fusion[i][3];
+    double vy = sensor_fusion[i][4];
+    double s = sensor_fusion[i][5];
+    double d = sensor_fusion[i][6];
+
+    // Compute s value for the detected car after step
+    double speed = sqrt(vx*vx + vy*vy);
+    s += (double) speed * .02;
+
+    // Check if it's in the same lane as our car...
+    bool in_same_lane = (car_d - 2 <= d) and (car_d + 2 >= d);
+
+    // Check if it's too close from our car...
+    bool is_too_close = (s > car_s) and (s - car_s < 30.0);
+
+    // If both yes, change lane
+    if (in_same_lane && is_too_close) {
+      should_change_lane = true;
+    }
+  }
+
+  if (should_change_lane) {
+    // TODO: Decide left or right, check for feasability, if not possible stay on same lane
+    end_goal.push_back(2);
+    end_goal.push_back(car_s + 30.0);
+  } else {
+    // Stay on the same lane...
+    end_goal.push_back(car_d);
+    // ...and keep going forward
+    end_goal.push_back(car_s + 30.0);
+  }
+
+  return end_goal;
+}
+
 int main() {
   uWS::Hub h;
 
@@ -202,10 +243,9 @@ int main() {
   	map_waypoints_dy.push_back(d_y);
   }
 
-  int lane = 1;
-  double ref_vel = 0.0; //mph
+  int n_sample = 10;
 
-  h.onMessage([&lane,&ref_vel,&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,&map_waypoints_dx,&map_waypoints_dy](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
+  h.onMessage([&n_sample,&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,&map_waypoints_dx,&map_waypoints_dy](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
                      uWS::OpCode opCode) {
     // "42" at the start of the message means there's a websocket message event.
     // The 4 signifies a websocket message
@@ -225,174 +265,39 @@ int main() {
           // j[1] is the data JSON object
 
         	// Main car's localization Data
-          	double car_x = j[1]["x"];
-          	double car_y = j[1]["y"];
-          	double car_s = j[1]["s"];
-          	double car_d = j[1]["d"];
-          	double car_yaw = j[1]["yaw"];
-          	double car_speed = j[1]["speed"];
+        	double car_x = j[1]["x"];
+        	double car_y = j[1]["y"];
+        	double car_s = j[1]["s"];
+        	double car_d = j[1]["d"];
+        	double car_yaw = j[1]["yaw"];
+        	double car_speed = j[1]["speed"];
 
-          	// Previous path data given to the Planner
-          	auto previous_path_x = j[1]["previous_path_x"];
-          	auto previous_path_y = j[1]["previous_path_y"];
-          	// Previous path's end s and d values
-          	double end_path_s = j[1]["end_path_s"];
-          	double end_path_d = j[1]["end_path_d"];
+        	// Previous path data given to the Planner
+        	auto previous_path_x = j[1]["previous_path_x"];
+        	auto previous_path_y = j[1]["previous_path_y"];
+        	// Previous path's end s and d values
+        	double end_path_s = j[1]["end_path_s"];
+        	double end_path_d = j[1]["end_path_d"];
 
-          	// Sensor Fusion Data, a list of all other cars on the same side of the road.
-          	auto sensor_fusion = j[1]["sensor_fusion"];
+        	// Sensor Fusion Data, a list of all other cars on the same side of the road
+        	auto sensor_fusion = j[1]["sensor_fusion"];
 
-          	json msgJson;
+        	json msgJson;
 
-            int prev_size = previous_path_x.size();
+          vector<double> next_x_vals;
+          vector<double> next_y_vals;
 
-            bool too_close = false;
+          // 1. Decide what the car should do based on data from sensor fusion and current state
+          vector<double> desired_goal = SimpleBehaviorPlanner(sensor_fusion, car_s, car_d, car_speed);
+          cout << "d: " << desired_goal[0] << ", s:" << desired_goal[1] << endl;
 
-            for(int i = 0; i < sensor_fusion.size(); i++)
-            {
-              double vx = sensor_fusion[i][3];
-              double vy = sensor_fusion[i][4];
-              double s = sensor_fusion[i][5];
-              double d = sensor_fusion[i][6];
+        	msgJson["next_x"] = next_x_vals;
+        	msgJson["next_y"] = next_y_vals;
 
-              // Check current car s value after target trajectory steps
-              double speed = sqrt(vx*vx + vy*vy);
-              s += (double) speed * .02;
+        	auto msg = "42[\"control\","+ msgJson.dump()+"]";
 
-              int target_d = 2+4*lane;
-              bool same_lane = (d >= target_d - 2) && (d <= target_d + 2);
-              bool dist_too_short = (s > car_s) && (s - car_s < 30.0);
-
-              // The detected car is on the same lane and too close from us
-              if(same_lane && dist_too_short)
-              {
-                too_close = true;
-                // Change lane
-                if(lane > 0)
-                {
-                  lane -= 1;
-                }
-              }
-            }
-
-            if(too_close)
-            {
-              ref_vel -= .224;
-            }
-            else
-            {
-              ref_vel = min(49.0, ref_vel + .224);
-            }
-
-          	// Define a path made up of (x,y) points that the car will visit sequentially every .02 seconds
-            double ref_x = car_x;
-            double ref_y = car_y;
-            double ref_yaw = deg2rad(car_yaw);
-
-            vector<double> ptsx;
-            vector<double> ptsy;
-
-            if(prev_size < 2)
-            {
-              // Use 2 points that make the path tangent to the car
-              double prev_car_x = car_x - cos(car_yaw);
-              double prev_car_y = car_y - sin(car_yaw);
-
-              ptsx.push_back(prev_car_x);
-              ptsx.push_back(car_x);
-
-              ptsy.push_back(prev_car_y);
-              ptsy.push_back(car_y);
-            }
-            else
-            {
-              ref_x = previous_path_x[prev_size-1];
-              ref_y = previous_path_y[prev_size-1];
-
-              double ref_x_prev = previous_path_x[prev_size-2];
-              double ref_y_prev = previous_path_y[prev_size-2];
-              ref_yaw = atan2(ref_y-ref_y_prev, ref_x-ref_x_prev);
-
-              ptsx.push_back(ref_x_prev);
-              ptsx.push_back(ref_x);
-
-              ptsy.push_back(ref_y_prev);
-              ptsy.push_back(ref_y);
-            }
-
-            // Define next trajectory points: 30m space points ahead of the starting reference (in Frenet)
-            vector<double> pts_0 = getXY(car_s+30, 2+4*lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
-            vector<double> pts_1 = getXY(car_s+60, 2+4*lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
-            vector<double> pts_2 = getXY(car_s+90, 2+4*lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
-
-            ptsx.push_back(pts_0[0]);
-            ptsx.push_back(pts_1[0]);
-            ptsx.push_back(pts_2[0]);
-
-            ptsy.push_back(pts_0[1]);
-            ptsy.push_back(pts_1[1]);
-            ptsy.push_back(pts_2[1]);
-
-            // Shift to car coordinate
-            for(size_t i = 0; i < ptsx.size(); ++i)
-            {
-              double shiftx = ptsx[i] - ref_x;
-              double shifty = ptsy[i] - ref_y;
-              ptsx[i] = shiftx*cos(0-ref_yaw) - shifty*sin(0-ref_yaw);
-              ptsy[i] = shiftx*sin(0-ref_yaw) + shifty*cos(0-ref_yaw);
-            }
-
-            // Use spline to calculate trajectory
-            tk::spline s;
-            s.set_points(ptsx, ptsy);
-
-            // Choose next waypoints from trajectory
-            vector<double> next_x_vals;
-          	vector<double> next_y_vals;
-
-            // Start from all the remaining previous path points from last time
-            for(size_t i = 0; i < prev_size; ++i)
-            {
-              next_x_vals.push_back(previous_path_x[i]);
-              next_y_vals.push_back(previous_path_y[i]);
-            }
-
-            double target_x = 30.0;
-            double target_y = s(target_x);
-            double target_dist = sqrt(target_x*target_x + target_y*target_y);
-            int N = target_dist / (0.02 * ref_vel/2.24); // 2.24 used to convert in m/s
-
-            double x_add_on = 0.0;
-
-            for(size_t i = 0; i < 50-prev_size; ++i)
-            {
-              double next_x = x_add_on + target_x/N;
-              double next_y = s(next_x);
-
-              x_add_on = next_x;
-
-              // Back to map coordinate
-              double x_ref = next_x;
-              double y_ref = next_y;
-              next_x = x_ref*cos(ref_yaw) - y_ref*sin(ref_yaw);
-              next_y = x_ref*sin(ref_yaw) + y_ref*cos(ref_yaw);
-
-              next_x += ref_x;
-              next_y += ref_y;
-
-              next_x_vals.push_back(next_x);
-              next_y_vals.push_back(next_y);
-            }
-            // END
-
-          	msgJson["next_x"] = next_x_vals;
-          	msgJson["next_y"] = next_y_vals;
-
-          	auto msg = "42[\"control\","+ msgJson.dump()+"]";
-
-          	//this_thread::sleep_for(chrono::milliseconds(1000));
-          	ws.send(msg.data(), msg.length(), uWS::OpCode::TEXT);
-
+        	//this_thread::sleep_for(chrono::milliseconds(1000));
+        	ws.send(msg.data(), msg.length(), uWS::OpCode::TEXT);
         }
       } else {
         // Manual driving
