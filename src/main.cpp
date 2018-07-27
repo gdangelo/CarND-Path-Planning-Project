@@ -206,6 +206,101 @@ vector<double> SimpleBehaviorPlanner(vector<vector<double>> sensor_fusion, doubl
   return end_goal;
 }
 
+vector<vector<double>> GenerateTrajectory(vector<double> desired_goal, double car_x, double car_y, double car_yaw, vector<double> previous_path_x, vector<double> previous_path_y, vector<double> map_waypoints_x, vector<double> map_waypoints_y, vector<double> map_waypoints_s) {
+  vector<double> ptsx;
+  vector<double> ptsy;
+
+  double ref_x = car_x;
+  double ref_y = car_y;
+  double ref_yaw = deg2rad(car_yaw);
+
+  int prev_size = previous_path_x.size();
+
+  if (prev_size < 2) {
+    // Use 2 points that make the path tangent to the car
+    double prev_car_x = car_x - cos(car_yaw);
+    double prev_car_y = car_y - sin(car_yaw);
+
+    ptsx.push_back(prev_car_x);
+    ptsx.push_back(car_x);
+
+    ptsy.push_back(prev_car_y);
+    ptsy.push_back(car_y);
+  } else {
+    ref_x = previous_path_x[prev_size-1];
+    ref_y = previous_path_y[prev_size-1];
+
+    double ref_x_prev = previous_path_x[prev_size-2];
+    double ref_y_prev = previous_path_y[prev_size-2];
+    ref_yaw = atan2(ref_y-ref_y_prev, ref_x-ref_x_prev);
+
+    ptsx.push_back(ref_x_prev);
+    ptsx.push_back(ref_x);
+
+    ptsy.push_back(ref_y_prev);
+    ptsy.push_back(ref_y);
+  }
+
+  // Define next trajectory point as the desired goal
+  vector<double> desired_goal_pts = getXY(desired_goal[1], desired_goal[0], map_waypoints_s, map_waypoints_x, map_waypoints_y);
+  ptsx.push_back(desired_goal_pts[0]);
+  ptsy.push_back(desired_goal_pts[1]);
+
+  // Shift to car coordinate
+  for (size_t i = 0; i < ptsx.size(); ++i) {
+    double shiftx = ptsx[i] - ref_x;
+    double shifty = ptsy[i] - ref_y;
+    ptsx[i] = shiftx*cos(0-ref_yaw) - shifty*sin(0-ref_yaw);
+    ptsy[i] = shiftx*sin(0-ref_yaw) + shifty*cos(0-ref_yaw);
+  }
+
+  // Use spline to calculate trajectory
+  tk::spline s;
+  s.set_points(ptsx, ptsy);
+
+  // Choose next waypoints from trajectory
+  vector<double> next_x_vals;
+  vector<double> next_y_vals;
+
+  // Start from all the remaining previous path points from last time
+  for (size_t i = 0; i < prev_size; ++i) {
+    next_x_vals.push_back(previous_path_x[i]);
+    next_y_vals.push_back(previous_path_y[i]);
+  }
+
+  double target_x = 30.0;
+  double target_y = s(target_x);
+  double target_dist = sqrt(target_x*target_x + target_y*target_y);
+  int N = target_dist / (0.02 * 45.0/2.24); // 2.24 used to convert in m/s
+
+  double x_add_on = 0.0;
+
+  for (size_t i = 0; i < 50-prev_size; ++i) {
+    double next_x = x_add_on + target_x/N;
+    double next_y = s(next_x);
+
+    x_add_on = next_x;
+
+    // Back to map coordinate
+    double x_ref = next_x;
+    double y_ref = next_y;
+    next_x = x_ref*cos(ref_yaw) - y_ref*sin(ref_yaw);
+    next_y = x_ref*sin(ref_yaw) + y_ref*cos(ref_yaw);
+
+    next_x += ref_x;
+    next_y += ref_y;
+
+    next_x_vals.push_back(next_x);
+    next_y_vals.push_back(next_y);
+  }
+
+  vector<vector<double>> trajectory;
+  trajectory.push_back(next_x_vals);
+  trajectory.push_back(next_y_vals);
+
+  return trajectory;
+}
+
 int main() {
   uWS::Hub h;
 
@@ -284,15 +379,22 @@ int main() {
 
         	json msgJson;
 
-          vector<double> next_x_vals;
-          vector<double> next_y_vals;
-
           // 1. Decide what the car should do based on data from sensor fusion and current state
           vector<double> desired_goal = SimpleBehaviorPlanner(sensor_fusion, car_s, car_d, car_speed);
-          cout << "d: " << desired_goal[0] << ", s:" << desired_goal[1] << endl;
 
-        	msgJson["next_x"] = next_x_vals;
-        	msgJson["next_y"] = next_y_vals;
+          // 2. Sample a large number of end configurations around the approximate desired position
+          // TODO: using a normal distribution
+          //vector<vector<double>> end_configs = SampleMultipleConfigurations(desired_goal, n_sample);
+
+          // 3. Discard all non-drivable configurations
+          // TODO
+          //vector<vector<double>> drivable_end_configs = FilterConfigurations(end_configs, sensor_fusion);
+
+          // 4. Generate trajectory
+          vector<vector<double>> next_vals = GenerateTrajectory(desired_goal, car_x, car_y, car_yaw, previous_path_x, previous_path_y, map_waypoints_x, map_waypoints_y, map_waypoints_s);
+
+        	msgJson["next_x"] = next_vals[0];
+        	msgJson["next_y"] = next_vals[1];
 
         	auto msg = "42[\"control\","+ msgJson.dump()+"]";
 
