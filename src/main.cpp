@@ -21,6 +21,9 @@ constexpr double pi() { return M_PI; }
 double deg2rad(double x) { return x * pi() / 180; }
 double rad2deg(double x) { return x * 180 / pi(); }
 
+const double SPEED_LIMIT = 46.0;
+const double SAFETY_DIST = 15.0;
+
 // Checks if the SocketIO event has JSON data.
 // If there is data the JSON object in string format will be returned,
 // else the empty string "" will be returned.
@@ -165,9 +168,72 @@ vector<double> getXY(double s, double d, const vector<double> &maps_s, const vec
 
 }
 
-vector<double> SimpleBehaviorPlanner(vector<vector<double>> sensor_fusion, double car_s, double car_d, double car_speed) {
+bool CheckLane(vector<vector<double>> sensor_fusion, double car_s, double car_d) {
+  // Check all cars from the desired lane
+  for (int i = 0; i < sensor_fusion.size(); ++i) {
+    // Retrieve detected car's state
+    double vx = sensor_fusion[i][3];
+    double vy = sensor_fusion[i][4];
+    double s = sensor_fusion[i][5];
+
+    double speed = sqrt(vx*vx + vy*vy);
+    s += (double) speed * .02;
+
+    if (s >= car_s - 5 and s <= car_s + SAFETY_DIST) {
+      // Not safe!
+      return false;
+    }
+  }
+
+  // It's safe!
+  return true;
+}
+
+int DetectLaneFromCarPos(double car_d) {
+  if (car_d < 4) {
+    return 0;
+  }
+  else if (car_d >= 4 && car_d < 8) {
+    return 1;
+  }
+  else {
+    return 2;
+  }
+}
+
+vector<double> SetEndGoal(double d, double s, double speed) {
   vector<double> end_goal;
+
+  end_goal.push_back(d);
+  end_goal.push_back(s);
+  end_goal.push_back(speed);
+
+  return end_goal;
+}
+
+vector<double> TryChangingLane(vector<vector<double>> car_from_left, vector<vector<double>> car_from_right, double car_s, double car_d, double car_speed, double front_car_speed) {
+  // Detect current lane
+  int lane = DetectLaneFromCarPos(car_d);
+
+  // Always check left lane first
+  if (lane > 0 && CheckLane(car_from_left, car_s, car_d)) {
+    return SetEndGoal(2+4*(lane - 1), car_s + 30.0, car_speed);
+  }
+  // Then check right lane if can't go to the left
+  else if (lane < 2 && CheckLane(car_from_right, car_s, car_d)) {
+    return SetEndGoal(2+4*(lane + 1), car_s + 30.0, car_speed);
+  }
+  // Otherwise, stay on same lane and slow down
+  else {
+    return SetEndGoal(2+4*lane, car_s + 30.0, car_speed);
+  }
+}
+
+vector<double> SimpleBehaviorPlanner(vector<vector<double>> sensor_fusion, double car_s, double car_d, double car_speed) {
   bool should_change_lane = false;
+  double front_car_speed;
+  vector<vector<double>> car_from_left;
+  vector<vector<double>> car_from_right;
 
   for (int i = 0; i < sensor_fusion.size(); ++i) {
     // Retrieve state of detected vehicle
@@ -180,30 +246,45 @@ vector<double> SimpleBehaviorPlanner(vector<vector<double>> sensor_fusion, doubl
     double speed = sqrt(vx*vx + vy*vy);
     s += (double) speed * .02;
 
-    // Check if it's in the same lane as our car...
+    // Check if the car lane...
     bool in_same_lane = (car_d - 2 <= d) and (car_d + 2 >= d);
+    bool from_left = d < car_d - 2;
+    bool from_right = d > car_d + 2;
 
     // Check if it's too close from our car...
-    bool is_too_close = (s > car_s) and (s - car_s < 30.0);
+    bool is_too_close = (s > car_s) and (s - car_s < SAFETY_DIST);
 
-    // If both yes, change lane
+    // Try to change lane if the car is too close from us in the same lane
     if (in_same_lane && is_too_close) {
       should_change_lane = true;
+      front_car_speed = speed;
+    }
+    else if (from_left) {
+      car_from_left.push_back(sensor_fusion[i]);
+    }
+    else if (from_right) {
+      car_from_right.push_back(sensor_fusion[i]);
     }
   }
 
+  // Try changing lane, if not possible slow down
   if (should_change_lane) {
-    // TODO: Decide left or right, check for feasability, if not possible stay on same lane
-    end_goal.push_back(2);
-    end_goal.push_back(car_s + 30.0);
+    return TryChangingLane(car_from_left, car_from_right, car_s, car_d, car_speed, front_car_speed);
   } else {
-    // Stay on the same lane...
-    end_goal.push_back(car_d);
-    // ...and keep going forward
-    end_goal.push_back(car_s + 30.0);
-  }
+    // Stay on the same lane and keep going forward
+    double speed;
 
-  return end_goal;
+    if (car_speed <= SPEED_LIMIT) {
+      speed = min(car_speed+4.0, SPEED_LIMIT);
+    }
+    else {
+      speed = car_speed;
+    }
+
+    int lane = DetectLaneFromCarPos(car_d);
+
+    return SetEndGoal(2+4*lane, car_s + 30.0, speed);
+  }
 }
 
 vector<vector<double>> GenerateTrajectory(vector<double> desired_goal, double car_x, double car_y, double car_yaw, vector<double> previous_path_x, vector<double> previous_path_y, vector<double> map_waypoints_x, vector<double> map_waypoints_y, vector<double> map_waypoints_s) {
@@ -271,7 +352,7 @@ vector<vector<double>> GenerateTrajectory(vector<double> desired_goal, double ca
   double target_x = 30.0;
   double target_y = s(target_x);
   double target_dist = sqrt(target_x*target_x + target_y*target_y);
-  int N = target_dist / (0.02 * 45.0/2.24); // 2.24 used to convert in m/s
+  int N = target_dist / (0.02 * desired_goal[2]/2.24); // 2.24 used to convert in m/s
 
   double x_add_on = 0.0;
 
@@ -339,8 +420,9 @@ int main() {
   }
 
   int n_sample = 10;
+  int lane = 1;
 
-  h.onMessage([&n_sample,&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,&map_waypoints_dx,&map_waypoints_dy](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
+  h.onMessage([&n_sample,&lane,&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,&map_waypoints_dx,&map_waypoints_dy](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
                      uWS::OpCode opCode) {
     // "42" at the start of the message means there's a websocket message event.
     // The 4 signifies a websocket message
