@@ -21,9 +21,12 @@ constexpr double pi() { return M_PI; }
 double deg2rad(double x) { return x * pi() / 180; }
 double rad2deg(double x) { return x * 180 / pi(); }
 
-const double SPEED_LIMIT = 49.5; // mph
+const double SPEED_LIMIT = 49.0; // mph
 const double SAFETY_DIST = 30.0; // meters
-const double MAX_ACCELERATION = 10.0; // m/s2
+const double MAX_ACCELERATION = .224; // m/s2
+
+// Reference velocity to target
+double ref_vel = 0.0; //mph
 
 // Checks if the SocketIO event has JSON data.
 // If there is data the JSON object in string format will be returned,
@@ -169,15 +172,28 @@ vector<double> getXY(double s, double d, const vector<double> &maps_s, const vec
 
 }
 
-double UpdateSpeed(double current_speed, double speed_to_match = -1) {
-  double addon = 0.2 * MAX_ACCELERATION * 2.24;
+double UpdateSpeed(double speed_to_match = -1) {
+  // By default speed up
+  double updated_speed = ref_vel + MAX_ACCELERATION;
 
+  // Otherwise, try to catch lane speed
   if (speed_to_match != -1) {
-    return max(speed_to_match, current_speed - addon);
+    speed_to_match *= 2.24 * .98; // mph // .98 to prevent overshooting front car speed
+
+    // Slow down to match lane speed
+    if (MAX_ACCELERATION <= ref_vel) {
+      updated_speed = max(speed_to_match, ref_vel - MAX_ACCELERATION);
+    }
+    // Accelerate to match lane speed
+    else {
+      updated_speed = min(speed_to_match, ref_vel + MAX_ACCELERATION);
+    }
   }
-  else {
-    return min(SPEED_LIMIT, current_speed + addon);
-  }
+
+  // Check to not exceed speed limit
+  ref_vel = min(SPEED_LIMIT, updated_speed);
+
+  return ref_vel;
 }
 
 bool CheckLane(vector<vector<double>> sensor_fusion, double car_s, double car_d) {
@@ -191,7 +207,8 @@ bool CheckLane(vector<vector<double>> sensor_fusion, double car_s, double car_d)
     double speed = sqrt(vx*vx + vy*vy);
     s += (double) speed * .02;
 
-    if (s >= car_s - 2 && s <= car_s + 1.1*SAFETY_DIST) {
+    // Check for cars behind and in front of ego car
+    if ((s >= car_s - 0.5*SAFETY_DIST) && (s <= car_s + 2.0*SAFETY_DIST)) {
       // Not safe!
       return false;
     }
@@ -215,8 +232,8 @@ int BestLane(vector<vector<double>> sensor_fusion_left, vector<vector<double>> s
     double speed = sqrt(vx*vx + vy*vy);
     s += (double) speed * .02;
 
-    if (s < closest_left_car_dist) {
-      closest_left_car_dist = s;
+    if ((s > car_s) && (s - car_s < closest_left_car_dist)) {
+      closest_left_car_dist = s - car_s;
     }
   }
 
@@ -230,14 +247,18 @@ int BestLane(vector<vector<double>> sensor_fusion_left, vector<vector<double>> s
     double speed = sqrt(vx*vx + vy*vy);
     s += (double) speed * .02;
 
-    if (s < closest_right_car_dist) {
-      closest_right_car_dist = s;
+    if ((s > car_s) && (s - car_s < closest_right_car_dist)) {
+      closest_right_car_dist = s - car_s;
     }
   }
 
-  if (closest_left_car_dist <= closest_right_car_dist) {
+  // Always go left, if cars are far away in front of ego car
+  // Or when the left front car is farest than the right front car
+  if ((closest_left_car_dist >= 3*SAFETY_DIST && closest_right_car_dist >= 3*SAFETY_DIST) ||
+       closest_left_car_dist >= closest_right_car_dist) {
     return 0;
   }
+  // Otherwise, go right
   else {
     return 2;
   }
@@ -265,36 +286,48 @@ vector<double> SetEndGoal(double s, double d, double speed) {
   return end_goal;
 }
 
-vector<double> TryChangingLane(vector<vector<double>> car_from_left, vector<vector<double>> car_from_right, double car_s, double car_d, double car_speed, double front_car_speed) {
+vector<double> TryChangingLane(vector<vector<double>> car_from_left, vector<vector<double>> car_from_right, double car_s, double car_d, double front_car_speed, double front_car_s) {
   // Detect current lane
   int lane = DetectLaneFromCarPos(car_d);
+
+  // Check if front car is not too close. Changing lane when front car is
+  // too close could cause collision and/or high jerk maneuveur
+  bool is_too_close = (front_car_s > car_s) && (front_car_s - car_s <= SAFETY_DIST*0.15);
 
   // Check lanes
   bool is_left_lane_safe = CheckLane(car_from_left, car_s, car_d);
   bool is_right_lane_safe = CheckLane(car_from_right, car_s, car_d);
 
+  cout << "Check lane: left--> " << is_left_lane_safe << ", right--> " << is_right_lane_safe << endl;
+
   // Can't go left, try right
-  if ((lane == 0 && is_right_lane_safe) || (lane == 1 && !is_left_lane_safe)) {
-    return SetEndGoal(car_s+1.5*SAFETY_DIST, 2+4*(lane+1), UpdateSpeed(car_speed));
+  if ((lane == 0 || (lane == 1 && !is_left_lane_safe)) && is_right_lane_safe && !is_too_close) {
+    cout << "Can't go left, try right" << endl;
+    return SetEndGoal(car_s+1.5*SAFETY_DIST, 2+4*(lane+1), UpdateSpeed());
   }
-  // Try best
-  else if (lane == 1 && is_left_lane_safe && is_right_lane_safe) {
+  // Try best lane
+  else if (lane == 1 && is_left_lane_safe && is_right_lane_safe && !is_too_close) {
     int best = BestLane(car_from_left, car_from_right, car_s);
-    return SetEndGoal(car_s+1.5*SAFETY_DIST, 2+4*best, UpdateSpeed(car_speed));
+    string str = (best == 0) ? "left" : "right";
+    cout << "Try best lane (" << str << ")" << endl;
+    return SetEndGoal(car_s+1.5*SAFETY_DIST, 2+4*best, UpdateSpeed());
   }
   // Can't go right, try left
-  else if ((lane == 2 && is_left_lane_safe) || (lane == 1 && !is_right_lane_safe)) {
-    return SetEndGoal(car_s+1.5*SAFETY_DIST, 2+4*(lane-1), UpdateSpeed(car_speed));
+  else if ((lane == 2 || (lane == 1 && !is_right_lane_safe)) && is_left_lane_safe && !is_too_close) {
+    cout << "Can't go right, try left" << endl;
+    return SetEndGoal(car_s+1.5*SAFETY_DIST, 2+4*(lane-1), UpdateSpeed());
   }
   // Otherwise, slow down
   else {
-    return SetEndGoal(car_s+SAFETY_DIST, 2+4*lane, UpdateSpeed(car_speed, front_car_speed));
+    cout << "Slow down" << endl;
+    return SetEndGoal(car_s+SAFETY_DIST, 2+4*lane, UpdateSpeed(front_car_speed));
   }
 }
 
-vector<double> SimpleBehaviorPlanner(vector<vector<double>> sensor_fusion, double car_s, double car_d, double car_speed) {
+vector<double> SimpleBehaviorPlanner(vector<vector<double>> sensor_fusion, double car_s, double car_d) {
   bool should_change_lane = false;
   double front_car_speed;
+  double front_car_s = INFINITY;
   vector<vector<double>> car_from_left;
   vector<vector<double>> car_from_right;
 
@@ -307,23 +340,26 @@ vector<double> SimpleBehaviorPlanner(vector<vector<double>> sensor_fusion, doubl
     double s = sensor_fusion[i][5];
     double d = sensor_fusion[i][6];
 
-    // Compute s value for the detected car after step
+    // Compute s value for the detected and ego car after step
     double speed = sqrt(vx*vx + vy*vy);
     s += (double) speed * 0.02;
 
-    // Check the car lane...
-    int detected_car_lane = DetectLaneFromCarPos(d);
+    // Check the car lane
+    int detected_car_lane = DetectLaneFromCarPos(d); // TODO: detect cars close to us between lanes (changing...)
     bool in_same_lane = lane == detected_car_lane;
     bool from_left = lane - 1 == detected_car_lane;
     bool from_right = lane + 1 == detected_car_lane;
 
-    // Check if it's too close from our car...
-    bool is_too_close = (s > car_s+car_speed*0.02) && (s - car_s+car_speed*0.02 < SAFETY_DIST);
+    // Check if it's close from our car
+    bool is_close = (s > car_s) && (s - car_s < SAFETY_DIST);
 
-    // Try to change lane if the car is too close from us in the same lane
-    if (in_same_lane && is_too_close) {
+    // Try to change lane if the car is close from us in the same lane
+    if (in_same_lane && is_close) {
       should_change_lane = true;
-      front_car_speed = speed;
+      if (s < front_car_s) {
+        front_car_speed = speed;
+        front_car_s = s;
+      }
     }
     else if (from_left) {
       car_from_left.push_back(sensor_fusion[i]);
@@ -335,11 +371,11 @@ vector<double> SimpleBehaviorPlanner(vector<vector<double>> sensor_fusion, doubl
 
   // Try changing lane, if not possible slow down
   if (should_change_lane) {
-    return TryChangingLane(car_from_left, car_from_right, car_s+car_speed*0.02, car_d, car_speed, front_car_speed);
+    return TryChangingLane(car_from_left, car_from_right, car_s, car_d, front_car_speed, front_car_s);
   }
   // Stay on the same lane and keep going forward
   else {
-    return SetEndGoal(car_s+SAFETY_DIST, 2+4*lane, UpdateSpeed(car_speed));
+    return SetEndGoal(car_s+SAFETY_DIST, 2+4*lane, UpdateSpeed());
   }
 }
 
@@ -406,7 +442,7 @@ vector<vector<double>> GenerateTrajectory(vector<double> desired_goal, double ca
     next_y_vals.push_back(previous_path_y[i]);
   }
 
-  double target_x = desired_goal_pts[0];
+  double target_x = 30.0;
   double target_y = s(target_x);
   double target_dist = sqrt(target_x*target_x + target_y*target_y);
   int N = target_dist / (0.02 * desired_goal[2]/2.24); // 2.24 used to convert in m/s
@@ -476,10 +512,7 @@ int main() {
   	map_waypoints_dy.push_back(d_y);
   }
 
-  int n_sample = 10;
-  int lane = 1;
-
-  h.onMessage([&n_sample,&lane,&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,&map_waypoints_dx,&map_waypoints_dy](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
+  h.onMessage([&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,&map_waypoints_dx,&map_waypoints_dy](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
                      uWS::OpCode opCode) {
     // "42" at the start of the message means there's a websocket message event.
     // The 4 signifies a websocket message
@@ -519,17 +552,9 @@ int main() {
         	json msgJson;
 
           // 1. Decide what the car should do based on data from sensor fusion and current state
-          vector<double> desired_goal = SimpleBehaviorPlanner(sensor_fusion, car_s, car_d, car_speed);
+          vector<double> desired_goal = SimpleBehaviorPlanner(sensor_fusion, car_s, car_d);
 
-          // 2. Sample a large number of end configurations around the approximate desired position
-          // TODO: using a normal distribution
-          //vector<vector<double>> end_configs = SampleMultipleConfigurations(desired_goal, n_sample);
-
-          // 3. Discard all non-drivable configurations
-          // TODO
-          //vector<vector<double>> drivable_end_configs = FilterConfigurations(end_configs, sensor_fusion);
-
-          // 4. Generate trajectory
+          // 2. Generate trajectory
           vector<vector<double>> next_vals = GenerateTrajectory(desired_goal, car_x, car_y, car_yaw, previous_path_x, previous_path_y, map_waypoints_x, map_waypoints_y, map_waypoints_s);
 
         	msgJson["next_x"] = next_vals[0];
