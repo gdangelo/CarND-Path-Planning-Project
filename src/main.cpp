@@ -182,7 +182,7 @@ double UpdateSpeed(double speed_to_match = -1) {
 
     // Slow down to match lane speed
     if (MAX_ACCELERATION <= ref_vel) {
-      updated_speed = max(speed_to_match, ref_vel - MAX_ACCELERATION);
+      updated_speed = max(speed_to_match, ref_vel - 1.5*MAX_ACCELERATION);
     }
     // Accelerate to match lane speed
     else {
@@ -207,9 +207,16 @@ bool CheckLane(vector<vector<double>> sensor_fusion, double car_s, double car_d)
     double speed = sqrt(vx*vx + vy*vy);
     s += (double) speed * .02;
 
-    // Check for cars behind and in front of ego car
-    if ((s >= car_s - 0.5*SAFETY_DIST) && (s <= car_s + 2.0*SAFETY_DIST)) {
-      // Not safe!
+    // Check for cars in front of ego car
+    if ((s >= car_s) && (s - car_s <= 2.0*SAFETY_DIST)) {
+      return false;
+    }
+
+    // Check for cars behind of ego car
+    double min_dist = 0.25 * SAFETY_DIST;
+    double max_dist = 1.0 * SAFETY_DIST;
+    double dist = (1 - ref_vel/SPEED_LIMIT) * max_dist + min_dist;
+    if ((s <= car_s) && (car_s - s <= dist)) {
       return false;
     }
   }
@@ -286,40 +293,29 @@ vector<double> SetEndGoal(double s, double d, double speed) {
   return end_goal;
 }
 
-vector<double> TryChangingLane(vector<vector<double>> car_from_left, vector<vector<double>> car_from_right, double car_s, double car_d, double front_car_speed, double front_car_s) {
+vector<double> TryChangingLane(vector<vector<double>> car_from_left, vector<vector<double>> car_from_right, double car_s, double car_d, double front_car_speed) {
   // Detect current lane
   int lane = DetectLaneFromCarPos(car_d);
-
-  // Check if front car is not too close. Changing lane when front car is
-  // too close could cause collision and/or high jerk maneuveur
-  bool is_too_close = (front_car_s > car_s) && (front_car_s - car_s <= SAFETY_DIST*0.15);
 
   // Check lanes
   bool is_left_lane_safe = CheckLane(car_from_left, car_s, car_d);
   bool is_right_lane_safe = CheckLane(car_from_right, car_s, car_d);
 
-  cout << "Check lane: left--> " << is_left_lane_safe << ", right--> " << is_right_lane_safe << endl;
-
   // Can't go left, try right
-  if ((lane == 0 || (lane == 1 && !is_left_lane_safe)) && is_right_lane_safe && !is_too_close) {
-    cout << "Can't go left, try right" << endl;
+  if ((lane == 0 || (lane == 1 && !is_left_lane_safe)) && is_right_lane_safe) {
     return SetEndGoal(car_s+1.5*SAFETY_DIST, 2+4*(lane+1), UpdateSpeed());
   }
   // Try best lane
-  else if (lane == 1 && is_left_lane_safe && is_right_lane_safe && !is_too_close) {
+  else if (lane == 1 && is_left_lane_safe && is_right_lane_safe) {
     int best = BestLane(car_from_left, car_from_right, car_s);
-    string str = (best == 0) ? "left" : "right";
-    cout << "Try best lane (" << str << ")" << endl;
     return SetEndGoal(car_s+1.5*SAFETY_DIST, 2+4*best, UpdateSpeed());
   }
   // Can't go right, try left
-  else if ((lane == 2 || (lane == 1 && !is_right_lane_safe)) && is_left_lane_safe && !is_too_close) {
-    cout << "Can't go right, try left" << endl;
+  else if ((lane == 2 || (lane == 1 && !is_right_lane_safe)) && is_left_lane_safe) {
     return SetEndGoal(car_s+1.5*SAFETY_DIST, 2+4*(lane-1), UpdateSpeed());
   }
   // Otherwise, slow down
   else {
-    cout << "Slow down" << endl;
     return SetEndGoal(car_s+SAFETY_DIST, 2+4*lane, UpdateSpeed(front_car_speed));
   }
 }
@@ -371,7 +367,7 @@ vector<double> SimpleBehaviorPlanner(vector<vector<double>> sensor_fusion, doubl
 
   // Try changing lane, if not possible slow down
   if (should_change_lane) {
-    return TryChangingLane(car_from_left, car_from_right, car_s, car_d, front_car_speed, front_car_s);
+    return TryChangingLane(car_from_left, car_from_right, car_s, car_d, front_car_speed);
   }
   // Stay on the same lane and keep going forward
   else {
