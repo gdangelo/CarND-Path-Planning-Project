@@ -65,6 +65,29 @@ and follow the steps 2 to 5 of the [Overview section](#overview) in order to bui
 
 ---
 
+## Implementation
+
+My implementation is composed of two main parts which are the [prediction and behavior planning](https://github.com/gdangelo/CarND-Path-Planning-Project/blob/master/src/main.cpp#L550), and the [trajectory generation](https://github.com/gdangelo/CarND-Path-Planning-Project/blob/master/src/main.cpp#L553). See details below. 
+
+### 1. Prediction/Behavior
+
+The prediction and behavior planning has been implemented under the `SimpleBehaviorPlanner` function starting [from line 323](https://github.com/gdangelo/CarND-Path-Planning-Project/blob/master/src/main.cpp#L323). Based on the current state of the ego car and data from sensor fusion, the system decides what the car should do. By interpreting and understanding the surrounding environment, it finds the best possible behavior to adopt in order to drive safely and efficiently:
+
+- We first look at cars in front of us blocking the traffic ([see lines 332 to 366](https://github.com/gdangelo/CarND-Path-Planning-Project/blob/master/src/main.cpp#L332)). If it is the case, the car must consider to change lane ([see lines 368 to 371](https://github.com/gdangelo/CarND-Path-Planning-Project/blob/master/src/main.cpp#L368)). 
+- Otherwise, the car stays in the same lane and keep going by speeding up until we reach the speed limit (see [lines 372 to 375](https://github.com/gdangelo/CarND-Path-Planning-Project/blob/master/src/main.cpp#L372)).
+
+Lane changing is handle by a distinct function named 'TryChangingLane' [starting from line 296](https://github.com/gdangelo/CarND-Path-Planning-Project/blob/master/src/main.cpp#L296). This function is checking lanes for safety based on distance from cars and current speed [see line 199 to 222](https://github.com/gdangelo/CarND-Path-Planning-Project/blob/master/src/main.cpp#L199). If no other lane is safe to drive, the ego car stays on its lane and slow down to reach the front car speed. 
+
+### 2. Trajectory
+
+---
+
+## Possible Improvements
+
+- 
+
+---
+
 ## Questions or Feedback
 
 > Contact me anytime for anything about my projects or machine learning in general. I'd be happy to help you :wink:
