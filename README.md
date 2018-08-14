@@ -76,9 +76,13 @@ The prediction and behavior planning has been implemented under the `SimpleBehav
 - We first look at cars in front of us blocking the traffic ([see lines 332 to 366](https://github.com/gdangelo/CarND-Path-Planning-Project/blob/master/src/main.cpp#L332)). If it is the case, the car must consider to change lane ([see lines 368 to 371](https://github.com/gdangelo/CarND-Path-Planning-Project/blob/master/src/main.cpp#L368)). 
 - Otherwise, the car stays in the same lane and keep going by speeding up until we reach the speed limit (see [lines 372 to 375](https://github.com/gdangelo/CarND-Path-Planning-Project/blob/master/src/main.cpp#L372)).
 
-Lane changing is handle by a distinct function named 'TryChangingLane' [starting from line 296](https://github.com/gdangelo/CarND-Path-Planning-Project/blob/master/src/main.cpp#L296). This function is checking lanes for safety based on distance from cars and current speed [see line 199 to 222](https://github.com/gdangelo/CarND-Path-Planning-Project/blob/master/src/main.cpp#L199). If no other lane is safe to drive, the ego car stays on its lane and slow down to reach the front car speed. 
+Lane changing is handle by a distinct function named `TryChangingLane` [starting from line 296](https://github.com/gdangelo/CarND-Path-Planning-Project/blob/master/src/main.cpp#L296). This function is checking lanes for safety based on distance from cars and current speed [see line 199 to 222](https://github.com/gdangelo/CarND-Path-Planning-Project/blob/master/src/main.cpp#L199). If no other lane is safe to drive, the ego car stays on its lane and slow down to reach the front car speed. 
 
 ### 2. Trajectory
+
+Thanks to the previous step, we know how the car should behave. Whether it's has to change lane or drive straight, its path must be as smooth as possible. This is done under the `GenerateTrajectory` function starting [from line 378](https://github.com/gdangelo/CarND-Path-Planning-Project/blob/master/src/main.cpp#L378). 
+
+Trajectory calculation is initiated using the [spline library](http://kluge.in-chemnitz.de/opensource/spline/). To ease computation the map coordinates are transformed to local car coordinates ([see lines 420 to 425](https://github.com/gdangelo/CarND-Path-Planning-Project/blob/master/src/main.cpp#L420)). Points are then sampled from spline result and added to previous remaining path points in order to ensure more continuity to the trajectory.
 
 ---
 
