@@ -88,7 +88,11 @@ Trajectory calculation is initiated using the [spline library](http://kluge.in-c
 
 ## Possible Improvements
 
-- 
+- Implement emergency braking
+- Enhance trajectory generation by:
+    1. Sampling a large number of end configurations near the desired position where we want the car to drive
+    2. Generate corresponding trajectories and discard all non-drivable ones
+    3. Pick the best trajectory based on jerk-minimizing cost function
 
 ---
 
